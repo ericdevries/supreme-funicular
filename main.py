@@ -1,4 +1,5 @@
 import psycopg2
+import pytz
 import sklearn
 import sklearn.preprocessing
 import sklearn.model_selection
@@ -10,7 +11,9 @@ from scipy.interpolate import spline
 from scipy.interpolate import InterpolatedUnivariateSpline, UnivariateSpline
 
 import numpy
+import csv
 import datetime
+from data import data as dataeelco
 from matplotlib import pyplot as plt
 
 connection = psycopg2.connect('dbname=instagram user=instagram password=instagram')
@@ -32,13 +35,96 @@ COLUMNS = [
 numpy.set_printoptions(linewidth=170, suppress=True)
 
 
+def plot_data_per_interval():
+
+    xvalues = []
+    yvalues = []
+
+    with open('15minutesweek.csv', 'r') as f:
+        reader = csv.reader(f)
+
+        alldata = []
+
+        for row in reader:
+            alldata.append([int(row[0]), float(row[1]) / float(row[2])])
+
+        alldata = sorted(alldata, key=lambda x: x[0])
+
+        xvalues = [x[0] for x in alldata]
+        yvalues = [y[1] for y in alldata]
+
+    scaler = sklearn.preprocessing.MinMaxScaler(feature_range=(-0.1, 0.1,))
+    yvalues = scaler.fit_transform(numpy.array(yvalues))
+
+    smooth = UnivariateSpline(xvalues, yvalues)
+    smooth.set_smoothing_factor(0)
+
+    xnew = numpy.linspace(0, len(xvalues) - 1, 7 * 24)
+
+    plt.plot(xnew, smooth(xnew), linestyle='--')
+
+    e = []
+
+    for d in dataeelco:
+        for d2 in d:
+            e.append(d2)
+
+    smooth3 = UnivariateSpline(xvalues, e)
+    smooth3.set_smoothing_factor(0.5)
+
+    plt.plot(xnew, smooth3(xnew))
+
+    plt.show()
+
+
+
+
+def group_data_per_interval(data):
+    results = {
+        # 'time': { total: 123, posts: 34 }
+    }
+
+    from dateutil.tz import tzlocal
+    localtz = tzlocal()
+
+    for row in data:
+        date = row[9]
+        date = date.replace(tzinfo=pytz.utc)
+        start = date - datetime.timedelta(days=date.weekday())
+        start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        diff = date - start
+
+        timeslot = int(diff.total_seconds() / (15 * 60))
+        followed_by = float(row[3])
+        likes = float(row[5])
+        comments = float(row[6])
+        engagement = (likes + 10*comments) / followed_by
+
+        if timeslot not in results:
+            results[timeslot] = { 'total': 0, 'posts': 0 }
+
+        results[timeslot]['total'] += engagement
+        results[timeslot]['posts'] += 1
+
+        #print([timeslot, engagement])
+
+
+    with open('15minutesweek.csv', 'w') as f:
+        writer = csv.writer(f)
+
+        for k, v in results.items():
+            print([k, v['total'], v['posts']])
+            writer.writerow([k, v['total'], v['posts']])
+
+
+
+
 def getdata():
     cursor.execute("""
         select u.id, p.id, u.follows, u.followed_by, p.type, p.likes, p.comments, p.filter, p.tags, p.created_time
         from user_profiles u
         join posts p on p.user_id = u.id
         where u.followed_by > 100
-        limit 500000
     """)
 
     return cursor.fetchall()
@@ -55,15 +141,15 @@ def preprocess_row(row):
     row[8] = len(row[8].split(' '))
 
     followed_by = float(row[3])
-    likes = float(row[4])
-    comments = float(row[5])
+    likes = float(row[5])
+    comments = float(row[6])
 
     date = row[9]
     #start = date - datetime.timedelta(days=date.weekday())
     start = date.replace(hour=0, minute=0, second=0, microsecond=0)
     diff = date - start
 
-    row[9] = int(diff.total_seconds() / (5 * 60))
+    row[9] = int(diff.total_seconds() / (15 * 60))
 
     row.append((likes + 10*comments) / followed_by)
 
@@ -105,13 +191,17 @@ def plot_engagement(keys, values):
 
 
 def main():
+    plot_data_per_interval()
+    return
+
+
     data = getdata()
+    grouped = group_data_per_interval(data)
+
     data = list(map(preprocess_row, data))
     data = sorted(data, key=lambda x: x[7])
 
     array = numpy.array(data)
-
-   # print(array)
 
     # category features
     enc = sklearn.preprocessing.LabelEncoder()
@@ -121,6 +211,10 @@ def main():
     array = array.astype(numpy.float)
 
     times = array[:,7]
+
+    grouped = group_data_per_interval(data)
+
+    return
 
     # everything between 0 and 1
     scaler = sklearn.preprocessing.MinMaxScaler()
@@ -141,16 +235,12 @@ def main():
 
     X_train, X_test, y_train, y_test = sklearn.model_selection.train_test_split(X, y, test_size=0.4, random_state=0)
 
-    print('training data', X_train.shape, y_train.shape)
-    print('test data', X_test.shape, y_test.shape)
-
     clf = sklearn.linear_model.SGDRegressor()
     fit = clf.fit(X_train, y_train)
     results = fit.predict(X_test)
 
     score = fit.score(X_test, y_test)
 
-    print(score)
     scaled_times = X_test[:,7]
     total = sorted(zip(scaled_times, results, y_test), key=lambda x: x[0])
 
