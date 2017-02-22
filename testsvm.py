@@ -13,10 +13,9 @@ from scipy.interpolate import InterpolatedUnivariateSpline, UnivariateSpline
 import numpy
 import csv
 import datetime
-from data import data as dataeelco
 from matplotlib import pyplot as plt
 
-connection = psycopg2.connect('dbname=instagram user=instagram password=instagram')
+connection = psycopg2.connect('host=192.168.1.244 dbname=instagram user=instagram password=instagram')
 cursor = connection.cursor()
 
 COLUMNS = [
@@ -27,8 +26,6 @@ COLUMNS = [
 ]
 
 numpy.set_printoptions(linewidth=170, suppress=True)
-
-
 
 def getdata():
     cursor.execute("""
